@@ -232,3 +232,27 @@ def ResidualNet(network_type, depth, num_classes, att_type):
         model = ResNet(Bottleneck, [3, 4, 23, 3], network_type, num_classes, att_type)
 
     return model
+
+
+def ResidualNetPlus1(network_type, depth, num_classes, att_type):
+
+    assert network_type in [
+        "ImageNet",
+        "CIFAR10",
+        "CIFAR100",
+    ], "network type should be ImageNet or CIFAR10 / CIFAR100"
+    assert depth in [18, 34, 50, 101], "network depth should be 18, 34, 50 or 101"
+
+    if depth == 18:
+        model = ResNet(BasicBlock, [2, 2, 2, 2+1], network_type, num_classes, att_type)
+
+    elif depth == 34:
+        model = ResNet(BasicBlock, [3, 4, 6, 3+1], network_type, num_classes, att_type)
+
+    elif depth == 50:
+        model = ResNet(Bottleneck, [3, 4, 6, 3+1], network_type, num_classes, att_type)
+
+    elif depth == 101:
+        model = ResNet(Bottleneck, [3, 4, 23, 3+1], network_type, num_classes, att_type)
+
+    return model

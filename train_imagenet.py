@@ -137,6 +137,8 @@ def main():
     # create model
     if args.arch == "resnet":
         model = ResidualNet("ImageNet", args.depth, 1000, args.att_type)
+    elif args.arch == 'resnet_plus1':
+        model = ResidualNetPlus1('ImageNet', args.depth, 1000, args.att_type)
     elif args.arch == "mobilenet":
         model = triplet_attention_mobilenet_v2()
 
@@ -152,7 +154,8 @@ def main():
     model = torch.nn.DataParallel(model, device_ids=list(range(args.ngpu)))
     # model = torch.nn.DataParallel(model).cuda()
     wandb.watch(model)
-    model = model.cuda()
+    with torch.autocast("cuda", enabled=True):
+        model = model.cuda()
     # print ("model")
     # print (model)
 
@@ -170,7 +173,7 @@ def main():
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint["epoch"]
             best_prec1 = checkpoint["best_prec1"]
-            model.load_state_dict(checkpoint["state_dict"])
+            model.load_state_dict(checkpoint["state_dict"], strict=False)
             if "optimizer" in checkpoint:
                 optimizer.load_state_dict(checkpoint["optimizer"])
             print(
@@ -276,13 +279,14 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        target = target.cuda(non_blocking=True)
-        input_var = torch.autograd.Variable(input)
-        target_var = torch.autograd.Variable(target)
+        with torch.autocast("cuda", enabled=True):
+            target = target.cuda(non_blocking=True)
+            input_var = torch.autograd.Variable(input)
+            target_var = torch.autograd.Variable(target)
 
-        # compute output
-        output = model(input_var)
-        loss = criterion(output, target_var)
+            # compute output
+            output = model(input_var)
+            loss = criterion(output, target_var)
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
@@ -330,13 +334,18 @@ def validate(val_loader, model, criterion, epoch):
 
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
-        target = target.cuda(non_blocking=True)
-        input_var = torch.autograd.Variable(input, volatile=True)
-        target_var = torch.autograd.Variable(target, volatile=True)
+        with torch.no_grad():
+            with torch.autocast("cuda", enabled=True):
+                target = target.cuda(non_blocking=True)
+                # volatile was removed and now has no effect. Use `with torch.no_grad():` instead.
+                # input_var = torch.autograd.Variable(input, volatile=True)
+                # target_var = torch.autograd.Variable(target, volatile=True)
+                input_var = torch.autograd.Variable(input)
+                target_var = torch.autograd.Variable(target)
 
-        # compute output
-        output = model(input_var)
-        loss = criterion(output, target_var)
+                # compute output
+                output = model(input_var)
+                loss = criterion(output, target_var)
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
@@ -429,7 +438,7 @@ def accuracy(output, target, topk=(1,)):
 
         res = []
         for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            correct_k = correct[:k].contiguous().view(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
