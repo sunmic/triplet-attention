@@ -17,6 +17,8 @@ from MODELS.mobilenet import *
 from MODELS.resnet import *
 from PIL import ImageFile
 
+from torch.utils.tensorboard import SummaryWriter
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 model_names = sorted(
     name
@@ -24,9 +26,9 @@ model_names = sorted(
     if name.islower() and not name.startswith("__") and callable(models.__dict__[name])
 )
 
-import wandb
+# import wandb
 
-wandb.init(project="TripletAttention")
+# wandb.init(project="TripletAttention")
 
 
 parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
@@ -130,6 +132,8 @@ def main():
     args = parser.parse_args()
     print("args", args)
 
+    writer = SummaryWriter()
+
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     random.seed(args.seed)
@@ -153,7 +157,7 @@ def main():
     )
     model = torch.nn.DataParallel(model, device_ids=list(range(args.ngpu)))
     # model = torch.nn.DataParallel(model).cuda()
-    wandb.watch(model)
+    # wandb.watch(model)
     with torch.autocast("cuda", enabled=True):
         model = model.cuda()
     # print ("model")
@@ -165,15 +169,16 @@ def main():
             sum([p.data.nelement() for p in model.parameters()])
         )
     )
-    wandb.log({"parameters": sum([p.data.nelement() for p in model.parameters()])})
+    # wandb.log({"parameters": sum([p.data.nelement() for p in model.parameters()])})
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint["epoch"]
-            best_prec1 = checkpoint["best_prec1"]
-            model.load_state_dict(checkpoint["state_dict"], strict=False)
+            # best_prec1 = checkpoint["best_prec1"]
+            best_prec1 = checkpoint["best_acc1"]
+            model.load_state_dict(checkpoint["state_dict"], strict=True)
             if "optimizer" in checkpoint:
                 optimizer.load_state_dict(checkpoint["optimizer"])
             print(
@@ -213,7 +218,7 @@ def main():
         pin_memory=True,
     )
     if args.evaluate:
-        validate(val_loader, model, criterion, 0)
+        validate(val_loader, model, criterion, 0, writer)
         return
 
     train_dataset = datasets.ImageFolder(
@@ -240,13 +245,13 @@ def main():
     )
 
     for epoch in range(args.start_epoch, args.epochs):
-        adjust_learning_rate(optimizer, epoch)
+        adjust_learning_rate(optimizer, epoch, writer)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
+        train(train_loader, model, criterion, optimizer, epoch, writer)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, epoch)
+        prec1 = validate(val_loader, model, criterion, epoch, writer)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -261,10 +266,11 @@ def main():
             },
             is_best,
             args.prefix,
+            epoch + 1
         )
 
 
-def train(train_loader, model, criterion, optimizer, epoch):
+def train(train_loader, model, criterion, optimizer, epoch, writer):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -321,9 +327,13 @@ def train(train_loader, model, criterion, optimizer, epoch):
                     top5=top5,
                 )
             )
+    writer.add_scalar("Time/train", batch_time.avg, epoch)
+    writer.add_scalar("Data/train", data_time.avg, epoch)
+    writer.add_scalar("Loss/train", losses.avg, epoch)
+    writer.add_scalar("Prec@1/train", top1.avg, epoch)
+    writer.add_scalar("Prec@5/train", top5.avg, epoch)
 
-
-def validate(val_loader, model, criterion, epoch):
+def validate(val_loader, model, criterion, epoch, writer):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -376,24 +386,30 @@ def validate(val_loader, model, criterion, epoch):
     print(" * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}".format(top1=top1, top5=top5))
 
     # log stats to wandb
-    wandb.log(
-        {
-            "epoch": epoch,
-            "Top-1 accuracy": top1.avg,
-            "Top-5 accuracy": top5.avg,
-            "loss": losses.avg,
-        }
-    )
+    # wandb.log(
+    #     {
+    #         "epoch": epoch,
+    #         "Top-1 accuracy": top1.avg,
+    #         "Top-5 accuracy": top5.avg,
+    #         "loss": losses.avg,
+    #     }
+    # )
+
+    writer.add_scalar("Time/val", batch_time.avg, epoch)
+    # writer.add_scalar("Data/val", data_time.avg, epoch)
+    writer.add_scalar("Loss/val", losses.avg, epoch)
+    writer.add_scalar("Prec@1/val", top1.avg, epoch)
+    writer.add_scalar("Prec@5/val", top5.avg, epoch)
 
     return top1.avg
 
 
-def save_checkpoint(state, is_best, prefix):
-    filename = "./checkpoints/%s_checkpoint.pth.tar" % prefix
+def save_checkpoint(state, is_best, prefix, epoch):
+    filename = "./checkpoints/%s_checkpoint_epoch%s.pth.tar" % (prefix, epoch)
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, "./checkpoints/%s_model_best.pth.tar" % prefix)
-        wandb.save(filename)
+        # wandb.save(filename)
 
 
 class AverageMeter(object):
@@ -415,7 +431,7 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def adjust_learning_rate(optimizer, epoch):
+def adjust_learning_rate(optimizer, epoch, writer):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     if args.arch == "mobilenet":
         lr = args.lr * (0.98 ** epoch)
@@ -423,7 +439,8 @@ def adjust_learning_rate(optimizer, epoch):
         lr = args.lr * (0.1 ** (epoch // 30))
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
-    wandb.log({"lr": lr})
+    # wandb.log({"lr": lr})
+    writer.add_scalar("lr", lr, epoch)
 
 
 def accuracy(output, target, topk=(1,)):
@@ -444,4 +461,7 @@ def accuracy(output, target, topk=(1,)):
 
 
 if __name__ == "__main__":
+    from clearml import Task
+    task = Task.init(project_name='attention-explanation',
+                     task_name=f'PCAMResNet18 from scratch')
     main()
