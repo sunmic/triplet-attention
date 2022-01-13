@@ -19,6 +19,8 @@ from PIL import ImageFile
 
 from torch.utils.tensorboard import SummaryWriter
 
+NUM_CLASSES = 101
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 model_names = sorted(
     name
@@ -31,7 +33,7 @@ model_names = sorted(
 # wandb.init(project="TripletAttention")
 
 
-parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
+parser = argparse.ArgumentParser(description="PyTorch Food101 Training")
 parser.add_argument("data", metavar="DIR", help="path to dataset")
 parser.add_argument(
     "--arch",
@@ -140,9 +142,9 @@ def main():
 
     # create model
     if args.arch == "resnet":
-        model = ResidualNet("ImageNet", args.depth, 1000, args.att_type)
+        model = ResidualNet("ImageNet", args.depth, NUM_CLASSES, args.att_type)
     elif args.arch == 'resnet_plus1':
-        model = ResidualNetPlus1('ImageNet', args.depth, 1000, args.att_type)
+        model = ResidualNetPlus1('ImageNet', args.depth, NUM_CLASSES, args.att_type)
     elif args.arch == "mobilenet":
         model = triplet_attention_mobilenet_v2()
 
@@ -192,18 +194,20 @@ def main():
     cudnn.benchmark = True
 
     # Data loading code
-    traindir = os.path.join(args.data, "train")
-    valdir = os.path.join(args.data, "val")
+    # traindir = os.path.join(args.data, "train")
+    # valdir = os.path.join(args.data, "val")
     normalize = transforms.Normalize(
-        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        # mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]  # ImageNet
+        mean=[0.5450, 0.4435, 0.3436], std=[0.2721, 0.2747, 0.2794]  # Food101
     )
 
     # import pdb
     # pdb.set_trace()
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(
-            valdir,
-            transforms.Compose(
+        datasets.Food101(
+            args.data,
+            split='test',
+            transform=transforms.Compose(
                 [
                     transforms.Resize(256),
                     transforms.CenterCrop(224),
@@ -216,14 +220,16 @@ def main():
         shuffle=False,
         num_workers=args.workers,
         pin_memory=True,
+        persistent_workers=True
     )
     if args.evaluate:
         validate(val_loader, model, criterion, 0, writer)
         return
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose(
+    train_dataset = datasets.Food101(
+        args.data,
+        split='train',
+        transform=transforms.Compose(
             [
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
@@ -242,11 +248,12 @@ def main():
         num_workers=args.workers,
         pin_memory=True,
         sampler=train_sampler,
+        persistent_workers=True
     )
 
     from clearml import Task
     task = Task.init(project_name='attention-explanation',
-                     task_name=f'PCAMResNet{args.depth} training on ImageNet dataset')
+                     task_name=f'PCAMResNet{args.depth} training on Food101 dataset ({NUM_CLASSES} classes) resume')
 
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, writer)
