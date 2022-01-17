@@ -216,6 +216,7 @@ def main():
         shuffle=False,
         num_workers=args.workers,
         pin_memory=True,
+        persistent_workers=True
     )
     if args.evaluate:
         validate(val_loader, model, criterion, 0, writer)
@@ -242,6 +243,7 @@ def main():
         num_workers=args.workers,
         pin_memory=True,
         sampler=train_sampler,
+        persistent_workers=True
     )
 
     from clearml import Task
@@ -272,6 +274,9 @@ def main():
             args.prefix,
             epoch + 1
         )
+
+    task.mark_completed()
+    task.close()
 
 
 def train(train_loader, model, criterion, optimizer, epoch, writer):
